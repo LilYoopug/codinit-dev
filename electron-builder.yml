@@ -65,8 +65,9 @@ win:
 linux:
   icon: assets/icons/icon.png
   target:
-    - AppImage
-    - deb
+    - target: deb
+      arch:
+        - arm64
   artifactName: ${name}-${version}-${os}-${arch}.${ext}
   category: Development
 

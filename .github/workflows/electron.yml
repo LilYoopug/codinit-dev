@@ -2,41 +2,29 @@ name: Electron Build and Release
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag for the release (e.g., v1.0.0). Leave empty if not applicable.'
-        required: false
-      os:
-        description: 'Operating system to build for (all, ubuntu-latest, windows-latest, macos-latest)'
-        required: false
-        default: 'all'
-  push:
-    branches:
-      - electron
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: [20.15.1]
-      fail-fast: false
+  build-and-release:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
 
+      - name: Get version from package.json
+        id: get-version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: v${VERSION}"
+
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 20.15.1
 
       - name: Install pnpm
         uses: pnpm/action-setup@v2
@@ -61,68 +49,36 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm
+          sudo apt-get install -y ruby ruby-dev build-essential
+          sudo gem install fpm
 
-      - name: Build Electron app
+      - name: Build Electron app (Linux ARM64 .deb)
         env:
           GH_TOKEN: ${{ secrets.TOKEN }}
           NODE_OPTIONS: "--max_old_space_size=4096"
+          USE_SYSTEM_FPM: "true"
         run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            pnpm run electron:build:win
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            pnpm run electron:build:mac
-          else
-            pnpm run electron:build:linux
-          fi
-        shell: bash
+          rm -rf dist
+          pnpm run electron:build:renderer
+          pnpm run electron:build:deps
+          ./node_modules/.bin/electron-builder --linux deb --arm64 --publish=never
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: electron-${{ runner.os }}-artifacts
-          path: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.deb
-            dist/*.AppImage
-            dist/*.zip
-            dist/*.blockmap
-            dist/*.yml
-          retention-days: 1
-          if-no-files-found: warn
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
+      - name: Display built files
+        run: ls -la dist/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.get-version.outputs.version }}
+          name: Release ${{ steps.get-version.outputs.version }}
           draft: false
-          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
           files: |
-            artifacts/**/*.exe
-            artifacts/**/*.dmg
-            artifacts/**/*.deb
-            artifacts/**/*.AppImage
-            artifacts/**/*.zip
-            artifacts/**/*.blockmap
-            artifacts/**/*.yml
+            dist/*.deb
+            dist/latest-linux-arm64.yml
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN }}
